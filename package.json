@@ -1,0 +1,15 @@
+{
+  "name": "AWSpenWhisk",
+  "version": "0.0.1",
+  "description": "Integrating AWS with OpenWhisk",
+  "main": "actions/feed.js",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/projectodd/awspenwhisk.git"
+  },
+  "author": "Jim Crossley",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "aws-sdk": "*"
+  }
+}
