@@ -1,5 +1,5 @@
 
-var AWS = require('aws-sdk');
+const AWS = require('aws-sdk');
 
 function main(args) {
   const accessKeyId = args.accessKeyId;
@@ -7,7 +7,7 @@ function main(args) {
   const region = args.region;
   AWS.config.update({region, credentials: {accessKeyId, secretAccessKey}});
 
-  var lifecycleEvent = args.lifecycleEvent;
+  const lifecycleEvent = args.lifecycleEvent;
   if (lifecycleEvent === 'CREATE') {
     console.log("Creating trigger " + args.triggerName);
     return triggerCreate(args);
@@ -27,78 +27,71 @@ function triggerCreate(args) {
   trigger = trigger[trigger.length -1];
   const endpoint = endpointUrl(args.webhookAction, trigger);
 
-  var s3 = new AWS.S3();
-  var sns = new AWS.SNS();
+  const s3 = new AWS.S3();
+  const sns = new AWS.SNS();
+
+  const setTopicAttributes = function(data) {
+    const topicArn = data.TopicArn;
+    const params = {
+      AttributeName: 'Policy', /* required */
+      TopicArn: topicArn, /* required */
+      AttributeValue: JSON.stringify({
+        Version: "2008-10-17",
+        Id: "s3-publish-to-sns",
+        Statement: [{
+          Effect: "Allow",
+          Principal: { "AWS" : "*" },
+          Action: [ "SNS:Publish" ],
+          Resource: topicArn,
+          Condition: {
+            ArnLike: {
+              "aws:SourceArn": "arn:aws:s3:*:*:" + bucket
+            }
+          }
+        }]
+      })
+    };
+    return sns.setTopicAttributes(params).promise()
+      .then(_ => topicArn);
+  }
+  const subscribe = function(topicArn) {
+    const params = {
+      Protocol: 'https', /* required */
+      TopicArn: topicArn, /* required */
+      Endpoint: endpoint
+    };
+    return sns.subscribe(params).promise()
+      .then(_ => topicArn);
+  }
+  const configureBucketNotification = function(topicArn) {
+    const params = {
+      Bucket: bucket,
+      NotificationConfiguration: {
+        TopicConfigurations: [
+          {
+            Events: [
+              "s3:ObjectCreated:*"
+            ],
+            TopicArn: topicArn
+          }
+        ]
+      }
+    };
+    return s3.putBucketNotificationConfiguration(params).promise()
+      .then(_ => topicArn);
+  }
 
   return new Promise(function(resolve, reject) {
-    var params = {
-      Name: trigger /* required */
-    };
-    sns.createTopic(params, function(err, data) {
-      if (err) {
+    s3.getBucketLocation({Bucket: bucket}).promise() // ensure bucket exists
+      .then(_ => sns.createTopic({Name: trigger}).promise())
+      .then(setTopicAttributes)
+      .then(subscribe)
+      .then(configureBucketNotification)
+      .then(topicArn => resolve({bucket, trigger, topicArn, endpoint}))
+      .catch(err => {
         console.log(err);
         reject(err);
-      } else {
-        var topicArn = data.TopicArn;
-        var params = {
-          AttributeName: 'Policy', /* required */
-          TopicArn: topicArn, /* required */
-          AttributeValue: JSON.stringify({
-            Version: "2008-10-17",
-            Id: "s3-publish-to-sns",
-            Statement: [{
-              Effect: "Allow",
-              Principal: { "AWS" : "*" },
-              Action: [ "SNS:Publish" ],
-              Resource: topicArn,
-              Condition: {
-                ArnLike: {
-                  "aws:SourceArn": "arn:aws:s3:*:*:" + bucket
-                }
-              }
-            }]
-          })
-        };
-        sns.setTopicAttributes(params, function(err, data) {
-          if (err) {
-            console.log(err);
-            reject(err);
-          } else {
-            var params = {
-              Protocol: 'https', /* required */
-              TopicArn: topicArn, /* required */
-              Endpoint: endpoint
-            };
-            sns.subscribe(params, function(err, data) {
-              if (err) {
-                console.log(err);
-                reject(err);
-              } else {
-                var params = {
-                  Bucket: bucket, 
-                  NotificationConfiguration: {
-                    TopicConfigurations: [
-                      {
-                        Events: [
-                          "s3:ObjectCreated:*"
-                        ], 
-                        TopicArn: topicArn
-                      }
-                    ]
-                  }
-                };
-                s3.putBucketNotificationConfiguration(params, function(err, data) {
-                  if (err) {
-                    console.log(err);
-                    reject(err);
-                  } else resolve({bucket, trigger, topicArn, endpoint});
-                });
-              }
-            });
-          }
-        });
-      }
-    });
+      });
   });
 }
 
