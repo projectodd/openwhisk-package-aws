@@ -1,12 +1,7 @@
 
-var openwhisk = require('openwhisk');
 var AWS = require('aws-sdk');
 
-const GATEWAY_ACTION = 'from-sns';
-
 function main(args) {
-  var wsk = openwhisk();
-
   const accessKeyId = args.accessKeyId;
   const secretAccessKey = args.secretAccessKey;
   const region = args.region;
@@ -14,27 +9,23 @@ function main(args) {
 
   var lifecycleEvent = args.lifecycleEvent;
   if (lifecycleEvent === 'CREATE') {
+    console.log("Creating trigger " + args.triggerName);
     return triggerCreate(args);
   }
   if (lifecycleEvent === 'DELETE') {
+    console.log("Deleting trigger " + args.triggerName);
     return triggerDelete(args);
   }
 }
 
 function triggerCreate(args) {
 
+  if (!args.bucket) return {error: "Bucket name is required"};
+
   const bucket = args.bucket;
-  if (!bucket) {
-    return new Promise((resolve, reject) => {
-      reject("Bucket name is a required parameter");
-    });
-  }
   var trigger = args.triggerName.split('/');
   trigger = trigger[trigger.length -1];
-
-  var actionName = process.env['__OW_ACTION_NAME'].split('/');
-  actionName[actionName.length - 1] = GATEWAY_ACTION;
-  actionName = actionName.join('/');
+  const endpoint = endpointUrl(args.webhookAction, trigger);
 
   var s3 = new AWS.S3();
   var sns = new AWS.SNS();
@@ -76,7 +67,7 @@ function triggerCreate(args) {
             var params = {
               Protocol: 'https', /* required */
               TopicArn: topicArn, /* required */
-              Endpoint: process.env['__OW_API_HOST'] + '/api/v1/web' + actionName + '?trigger=' + trigger
+              Endpoint: endpoint
             };
             sns.subscribe(params, function(err, data) {
               if (err) {
@@ -100,7 +91,7 @@ function triggerCreate(args) {
                   if (err) {
                     console.log(err);
                     reject(err);
-                  } else resolve({bucket, trigger, actionName, topicArn});
+                  } else resolve({bucket, trigger, topicArn, endpoint});
                 });
               }
             });
@@ -113,6 +104,13 @@ function triggerCreate(args) {
 
 function triggerDelete(args) {
   return {};
+}
+
+function endpointUrl(webhookAction, trigger) {
+  var action = process.env['__OW_ACTION_NAME'].split('/');
+  action[action.length - 1] = webhookAction;
+  action = action.join('/');
+  return process.env['__OW_API_HOST'] + '/api/v1/web' + action + '?trigger=' + trigger;
 }
 
 exports.main = main;

@@ -17,13 +17,16 @@ pushd $PACKAGE_HOME
 npm install
 zip -rq awspenwhisk.zip package.json actions/ node_modules/
 
+WEBHOOK_ACTION="from-sns"
+
 set -x
 
 $WSK --apihost $APIHOST --auth $AUTH package update awspenwhisk \
      --shared yes -a description "Openwhisk AWS Integration"
-$WSK --apihost $APIHOST --auth $AUTH action update awspenwhisk/from-sns \
+$WSK --apihost $APIHOST --auth $AUTH action update awspenwhisk/$WEBHOOK_ACTION \
      --web true $PACKAGE_HOME/actions/webhook.js
 $WSK --apihost $APIHOST --auth $AUTH action update awspenwhisk/feed \
-     -a feed true -p region us-west-2 --kind nodejs:6 $PACKAGE_HOME/awspenwhisk.zip
+     -a feed true -p region us-west-2 -p webhookAction $WEBHOOK_ACTION \
+     --kind nodejs:6 $PACKAGE_HOME/awspenwhisk.zip
 
 popd

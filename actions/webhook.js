@@ -7,6 +7,7 @@ function main(args) {
   
   if (req.Type == 'SubscriptionConfirmation') {
     // AWS subscribers must be confirmed first
+    console.log(req);
     return new Promise(function(resolve, reject) {
       request.get(req.SubscribeURL, (err, res, body) => {
         if (err) {
