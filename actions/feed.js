@@ -23,9 +23,8 @@ function main(args) {
 
 function triggerCreate(args) {
 
-  if (!args.bucket) return {error: "Bucket name is required"};
-
   const bucket = args.bucket;
+  const events = args.events;
   const trigger = triggerName(args);
   const endpoint = endpointUrl(args.webhookAction, trigger);
 
@@ -68,7 +67,7 @@ function triggerCreate(args) {
   const configureBucketNotification = function(topicArn) {
     return s3.getBucketNotificationConfiguration({Bucket: bucket}).promise()
       .then(data => {
-        data.TopicConfigurations.push({Events: [ "s3:ObjectCreated:*" ], TopicArn: topicArn});
+        data.TopicConfigurations.push({Events: [ events ], TopicArn: topicArn});
         const params = {
           Bucket: bucket,
           NotificationConfiguration: data
