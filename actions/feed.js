@@ -67,7 +67,9 @@ function triggerCreate(args) {
   const configureBucketNotification = function(topicArn) {
     return s3.getBucketNotificationConfiguration({Bucket: bucket}).promise()
       .then(data => {
-        data.TopicConfigurations.push({Events: [ events ], TopicArn: topicArn});
+        var config = {Id: trigger, TopicArn: topicArn};
+        config.Events = events.split(/\s*[,;|]\s*/);
+        data.TopicConfigurations.push(config);
         const params = {
           Bucket: bucket,
           NotificationConfiguration: data

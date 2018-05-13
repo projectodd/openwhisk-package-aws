@@ -11,14 +11,16 @@ then
 fi
 
 PACKAGE_HOME="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-echo Uninstalling AWSpenWhisk \
+PACKAGE_NAME=aws
+
+echo Uninstalling $PACKAGE_NAME package 
 
 set -x
 
-for i in $($WSK --apihost $APIHOST --auth $AUTH action list | grep awspenwhisk | awk '{print $1}')
+for i in $($WSK --apihost $APIHOST --auth $AUTH action list | grep "/$PACKAGE_NAME/" | awk '{print $1}')
 do
     $WSK --apihost $APIHOST --auth $AUTH action delete $i
 done
 
-$WSK --apihost $APIHOST --auth $AUTH package delete awspenwhisk
+$WSK --apihost $APIHOST --auth $AUTH package delete $PACKAGE_NAME
 
