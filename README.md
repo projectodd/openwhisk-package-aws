@@ -1,6 +1,6 @@
 # AWSpenWhisk
 
-Integration of AWS services with public clouds running
+Integration of [AWS] services with public clouds running
 [Apache OpenWhisk].
 
 ## Installation
@@ -35,7 +35,7 @@ the feed, an [SNS] topic is created on AWS to which an `https`
 endpoint is subscribed. The URL for the endpoint is that of this
 package's `from-sns` web action.
 
-*IMPORTANT* AWS needs to be able to visit the web action, so your
+**IMPORTANT!** AWS needs to be able to visit the web action, so your
 OpenWhisk cluster needs to be publicly accessible.
 
 The feed provides two parameters: 
@@ -93,4 +93,5 @@ Enjoy! Feedback, improvements, and enhancement ideas are most welcome!
 [S3 event types]: https://docs.aws.amazon.com/AmazonS3/latest/dev/NotificationHowTo.html#supported-notification-event-types 
 [SNS]: https://aws.amazon.com/sns/
 [S3]: https://aws.amazon.com/s3/
-[Apache OpenWhisk]: https://openwhisk.org
+[Apache OpenWhisk]: http://openwhisk.incubator.apache.org/
+[AWS]: https://aws.amazon.com/
