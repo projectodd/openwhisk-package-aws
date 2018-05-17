@@ -1,6 +1,7 @@
 
 const AWS = require('aws-sdk');
 const openwhisk = require('openwhisk');
+const util = require('util');
 
 function initAws(args) {
   const accessKeyId = args.accessKeyId;
@@ -17,7 +18,7 @@ function main(args) {
   const lifecycleEvent = args.lifecycleEvent;
   if (lifecycleEvent === 'CREATE') {
     return getTrigger.then(trigger => {
-      console.log("Create trigger ", trigger);
+      console.log("Create trigger ", util.inspect(trigger, {depth: null}));
       return triggerCreate(trigger, args)
         .then(data => {
           trigger.annotations.push({key: 'aws', value: data});
@@ -28,7 +29,7 @@ function main(args) {
   }
   if (lifecycleEvent === 'DELETE') {
     return getTrigger.then(trigger => {
-      console.log("Delete trigger ", trigger);
+      console.log("Delete trigger ", util.inspect(trigger, {depth: null}));
       return triggerDelete(trigger, args);
     });
   }
@@ -105,13 +106,16 @@ function triggerCreate(trigger, args) {
 }
 
 function triggerDelete(trigger, args) {
+  const aws = trigger.annotations.find(x => x.key == 'aws').value;
+  const {Bucket, TopicArn} = aws;
+
+  // We must connect to the region in which the topic was created 
+  args.region = TopicArn.split(':')[3];
   initAws(args);
+
   const sns = new AWS.SNS();
   const s3 = new AWS.S3();
 
-  const aws = trigger.annotations.find(x => x.key == 'aws').value;
-  const {Bucket, TopicArn} = aws;
-  
   const reconfigureBucketNotification = function() {
     return s3.getBucketNotificationConfiguration({Bucket}).promise()
       .then(data => {
