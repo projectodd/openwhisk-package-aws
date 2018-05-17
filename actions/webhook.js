@@ -1,9 +1,10 @@
-var request = require('request');
-var openwhisk = require('openwhisk');
+const request = require('request');
+const openwhisk = require('openwhisk');
+const util = require('util');
 
 function main(args) {
-  var req = JSON.parse(args.__ow_body);
-  var wsk = openwhisk();
+  const req = JSON.parse(args.__ow_body);
+  const wsk = openwhisk();
   
   if (req.Type == 'SubscriptionConfirmation') {
     // AWS subscribers must be confirmed first
@@ -13,7 +14,7 @@ function main(args) {
         if (err) {
           reject({statusCode: 500, body: err});
         } else {
-          resolve({statusCode: 200, body: body});
+          resolve({statusCode: 200, body});
         }
       });
     });
@@ -21,10 +22,8 @@ function main(args) {
 
   const name = args.trigger;
   const params = JSON.parse(req.Message);
-  console.log('Firing ' + name + ' with ' + JSON.stringify(params));
-  return wsk.triggers.invoke({name, params}).then(result => {
-    return {statusCode: 200, body: result};
-  }, error => {
-    return {statusCode: 500, body: error};
-  });
+  console.log("Firing trigger '" + name + "' with", util.inspect(params, {depth: null}));
+  return wsk.triggers.invoke({name, params})
+    .then(result => ({statusCode: 200, body: result}))
+    .catch(error => ({statusCode: 500, body: error}));
 }
