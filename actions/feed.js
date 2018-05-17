@@ -1,5 +1,6 @@
 
 const AWS = require('aws-sdk');
+const openwhisk = require('openwhisk');
 
 function initAws(args) {
   const accessKeyId = args.accessKeyId;
@@ -10,29 +11,39 @@ function initAws(args) {
 
 function main(args) {
   initAws(args);
+  const wsk = openwhisk();
+  const getTrigger = wsk.triggers.get({name: args.triggerName});
+  
   const lifecycleEvent = args.lifecycleEvent;
   if (lifecycleEvent === 'CREATE') {
-    console.log("Creating trigger " + args.triggerName);
-    return triggerCreate(args);
+    return getTrigger.then(trigger => {
+      console.log("Create trigger ", trigger);
+      return triggerCreate(trigger, args)
+        .then(data => {
+          trigger.annotations.push({key: 'aws', value: data});
+          return wsk.triggers.update({name: trigger.name, trigger: trigger})
+            .then(_ => data);
+        });
+    });
   }
   if (lifecycleEvent === 'DELETE') {
-    console.log("Deleting trigger " + args.triggerName);
-    return triggerDelete(args);
+    return getTrigger.then(trigger => {
+      console.log("Delete trigger ", trigger);
+      return triggerDelete(trigger, args);
+    });
   }
 }
 
-function triggerCreate(args) {
+function triggerCreate(trigger, args) {
 
   const bucket = args.bucket;
   const events = args.events;
-  const trigger = triggerName(args);
   const endpoint = endpointUrl(args.webhookAction, trigger);
 
   const s3 = new AWS.S3();
   const sns = new AWS.SNS();
 
-  const setTopicAttributes = function(data) {
-    const topicArn = data.TopicArn;
+  const setTopicAttributes = function(topicArn) {
     const params = {
       AttributeName: 'Policy', /* required */
       TopicArn: topicArn, /* required */
@@ -52,8 +63,7 @@ function triggerCreate(args) {
         }]
       })
     };
-    return sns.setTopicAttributes(params).promise()
-      .then(_ => topicArn);
+    return sns.setTopicAttributes(params).promise();
   }
   const subscribe = function(topicArn) {
     const params = {
@@ -61,31 +71,32 @@ function triggerCreate(args) {
       TopicArn: topicArn, /* required */
       Endpoint: endpoint
     };
-    return sns.subscribe(params).promise()
-      .then(_ => topicArn);
+    return sns.subscribe(params).promise();
   }
   const configureBucketNotification = function(topicArn) {
     return s3.getBucketNotificationConfiguration({Bucket: bucket}).promise()
       .then(data => {
-        var config = {Id: trigger, TopicArn: topicArn};
+        var config = {Id: trigger.name, TopicArn: topicArn};
         config.Events = events.split(/\s*[,;|]\s*/);
         data.TopicConfigurations.push(config);
         const params = {
           Bucket: bucket,
           NotificationConfiguration: data
         };
-        return s3.putBucketNotificationConfiguration(params).promise()
-      })
-      .then(_ => topicArn);
+        return s3.putBucketNotificationConfiguration(params).promise();
+      });
   }
 
   return new Promise(function(resolve, reject) {
     s3.getBucketLocation({Bucket: bucket}).promise() // ensure bucket exists
-      .then(_ => sns.createTopic({Name: trigger}).promise())
-      .then(setTopicAttributes)
-      .then(subscribe)
-      .then(configureBucketNotification)
-      .then(topicArn => resolve({bucket, trigger, topicArn, endpoint}))
+      .then(_ => sns.createTopic({Name: trigger.name}).promise())
+      .then(data => {
+        const topicArn = data.TopicArn;
+        return setTopicAttributes(topicArn)
+          .then(_ => subscribe(topicArn))
+          .then(_ => configureBucketNotification(topicArn))
+          .then(_ => resolve({Bucket: bucket, TopicArn: topicArn}));
+      })
       .catch(err => {
         console.log(err);
         reject(err);
@@ -93,39 +104,27 @@ function triggerCreate(args) {
   });
 }
 
-function triggerDelete(args) {
+function triggerDelete(trigger, args) {
   initAws(args);
   const sns = new AWS.SNS();
   const s3 = new AWS.S3();
-  const trigger = triggerName(args);
 
-  const reconfigureBucketNotification = function(topic) {
-    // Gnarly because we have to find our bucket in the bowels of
-    // the topic's policy. We could avoid this if the DELETE
-    // action passed the same bucket param we passed to CREATE
-    return sns.getTopicAttributes(topic).promise()
+  const aws = trigger.annotations.find(x => x.key == 'aws').value;
+  const {Bucket, TopicArn} = aws;
+  
+  const reconfigureBucketNotification = function() {
+    return s3.getBucketNotificationConfiguration({Bucket}).promise()
       .then(data => {
-        const b = JSON.parse(data.Attributes.Policy).Statement[0].Condition.ArnLike['aws:SourceArn'].split(':');
-        const bucket = b[b.length - 1];
-        return s3.getBucketNotificationConfiguration({Bucket: bucket}).promise()
-          .then(data => {
-            data.TopicConfigurations = data.TopicConfigurations.filter(x => x.TopicArn != topic.TopicArn);
-            const params = {
-              Bucket: bucket,
-              NotificationConfiguration: data
-            };
-            return s3.putBucketNotificationConfiguration(params).promise()
-              .then(_ => topic);
-          });
+        data.TopicConfigurations = data.TopicConfigurations.filter(x => x.TopicArn != TopicArn);
+        const params = {Bucket, NotificationConfiguration: data };
+        return s3.putBucketNotificationConfiguration(params).promise();
       });
   }
 
   return new Promise(function(resolve, reject) {
-    sns.listTopics().promise()
-      .then(data => data.Topics.find(x => x.TopicArn.match(':'+trigger+'$')))
-      .then(reconfigureBucketNotification)
-      .then(topic => sns.deleteTopic(topic).promise())
-      .then(data => resolve(data))
+    reconfigureBucketNotification()
+      .then(_ => sns.deleteTopic({TopicArn}).promise())
+      .then(_ => resolve(aws))
       .catch(err => {
         console.log(err);
         reject(err);
@@ -137,12 +136,7 @@ function endpointUrl(webhookAction, trigger) {
   var action = process.env['__OW_ACTION_NAME'].split('/');
   action[action.length - 1] = webhookAction;
   action = action.join('/');
-  return process.env['__OW_API_HOST'] + '/api/v1/web' + action + '?trigger=' + trigger;
-}
-
-function triggerName(args) {
-  const x = args.triggerName.split('/');
-  return x[x.length - 1];
+  return process.env['__OW_API_HOST'] + '/api/v1/web' + action + '?trigger=' + trigger.name;
 }
 
 exports.main = main;
