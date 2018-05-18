@@ -21,9 +21,20 @@ function main(args) {
   }
 
   const name = args.trigger;
-  const params = JSON.parse(req.Message);
+  const params = parse(req);
   console.log("Firing trigger '" + name + "' with", util.inspect(params, {depth: null}));
   return wsk.triggers.invoke({name, params})
     .then(result => ({statusCode: 200, body: result}))
     .catch(error => ({statusCode: 500, body: error}));
+}
+
+function parse(req) {
+  try {
+    return JSON.parse(req.Message);
+  } catch (e) {
+    const result = {Message: req.Message};
+    if (req.Subject)
+      result.Subject = req.Subject;
+    return result;
+  }
 }

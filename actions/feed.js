@@ -3,144 +3,170 @@ const AWS = require('aws-sdk');
 const openwhisk = require('openwhisk');
 const util = require('util');
 
-function initAws(args) {
-  const accessKeyId = args.accessKeyId;
-  const secretAccessKey = args.secretAccessKey;
-  const region = args.region;
-  AWS.config.update({region, credentials: {accessKeyId, secretAccessKey}});
-}
-
 function main(args) {
-  initAws(args);
-  const wsk = openwhisk();
-  const getTrigger = wsk.triggers.get({name: args.triggerName});
-  
   const lifecycleEvent = args.lifecycleEvent;
+
   if (lifecycleEvent === 'CREATE') {
-    return getTrigger.then(trigger => {
-      console.log("Create trigger ", util.inspect(trigger, {depth: null}));
-      return triggerCreate(trigger, args)
-        .then(data => {
-          trigger.annotations.push({key: 'aws', value: data});
-          return wsk.triggers.update({name: trigger.name, trigger: trigger})
-            .then(_ => data);
-        });
-    });
+    return triggerCreate(args);
   }
   if (lifecycleEvent === 'DELETE') {
-    return getTrigger.then(trigger => {
-      console.log("Delete trigger ", util.inspect(trigger, {depth: null}));
-      return triggerDelete(trigger, args);
-    });
+    return triggerDelete(args);
   }
 }
 
-function triggerCreate(trigger, args) {
+function triggerCreate(args) {
+  const {s3, sns} = initAws(args);
+  const wsk = openwhisk();
 
-  const bucket = args.bucket;
-  const events = args.events;
-  const endpoint = endpointUrl(args.webhookAction, trigger);
-
-  const s3 = new AWS.S3();
-  const sns = new AWS.SNS();
-
-  const setTopicAttributes = function(topicArn) {
+  const createTopic = function(trigger) {
+    const p = args.topicArn ?
+          Promise.resolve({TopicArn: args.topicArn}) :
+          sns.createTopic({Name: trigger.name}).promise();
+    return p.then(data => {
+      trigger.aws = data;       // convenient reference, yay mutability?!
+      trigger.annotations.push({key: 'aws', value: data});
+      return wsk.triggers.update({name: trigger.name, trigger: trigger});
+    }).then(() => trigger);
+  }
+  const subscribe = function(trigger) {
     const params = {
-      AttributeName: 'Policy', /* required */
-      TopicArn: topicArn, /* required */
-      AttributeValue: JSON.stringify({
-        Version: "2008-10-17",
-        Id: "s3-publish-to-sns",
-        Statement: [{
+      Protocol: 'https', /* required */
+      TopicArn: trigger.aws.TopicArn, /* required */
+      Endpoint: endpointUrl(args.webhookAction, trigger.name)
+    };
+    return sns.subscribe(params).promise()
+      .then(() => trigger);
+  }
+  const configureTopic = function(trigger) {
+    return sns.getTopicAttributes({TopicArn: trigger.aws.TopicArn}).promise()
+      .then(data => {
+        const policy = JSON.parse(data.Attributes.Policy);
+        policy.Statement.push({
+          Sid: trigger.name,
           Effect: "Allow",
           Principal: { "AWS" : "*" },
           Action: [ "SNS:Publish" ],
-          Resource: topicArn,
+          Resource: trigger.aws.TopicArn,
           Condition: {
             ArnLike: {
-              "aws:SourceArn": "arn:aws:s3:*:*:" + bucket
+              "aws:SourceArn": "arn:aws:s3:*:*:" + args.bucket
             }
           }
-        }]
-      })
-    };
-    return sns.setTopicAttributes(params).promise();
-  }
-  const subscribe = function(topicArn) {
-    const params = {
-      Protocol: 'https', /* required */
-      TopicArn: topicArn, /* required */
-      Endpoint: endpoint
-    };
-    return sns.subscribe(params).promise();
-  }
-  const configureBucketNotification = function(topicArn) {
-    return s3.getBucketNotificationConfiguration({Bucket: bucket}).promise()
-      .then(data => {
-        var config = {Id: trigger.name, TopicArn: topicArn};
-        config.Events = events.split(/\s*[,;|]\s*/);
-        data.TopicConfigurations.push(config);
+        });
         const params = {
-          Bucket: bucket,
-          NotificationConfiguration: data
+          TopicArn: trigger.aws.TopicArn,
+          AttributeName: 'Policy',
+          AttributeValue: JSON.stringify(policy)
         };
-        return s3.putBucketNotificationConfiguration(params).promise();
+        return sns.setTopicAttributes(params).promise()
+          .then(() => trigger);
       });
+  }
+  const validateBucket = function(trigger) {
+    return s3.getBucketLocation({Bucket: args.bucket}).promise()
+      .then(() => {
+        trigger.aws.Bucket = args.bucket;
+        return wsk.triggers.update({name: trigger.name, trigger: trigger})
+      }).then(() => trigger);
+  }
+  const configureBucket = function(trigger) {
+    return s3.getBucketNotificationConfiguration({Bucket: args.bucket}).promise()
+      .then(data => {
+        var config = {Id: trigger.name, TopicArn: trigger.aws.TopicArn};
+        config.Events = args.events.split(/\s*[,;|]\s*/);
+        data.TopicConfigurations.push(config);
+        const params = {Bucket: args.bucket, NotificationConfiguration: data};
+        return s3.putBucketNotificationConfiguration(params).promise();
+      }).then(() => trigger);
   }
 
   return new Promise(function(resolve, reject) {
-    s3.getBucketLocation({Bucket: bucket}).promise() // ensure bucket exists
-      .then(_ => sns.createTopic({Name: trigger.name}).promise())
-      .then(data => {
-        const topicArn = data.TopicArn;
-        return setTopicAttributes(topicArn)
-          .then(_ => subscribe(topicArn))
-          .then(_ => configureBucketNotification(topicArn))
-          .then(_ => resolve({Bucket: bucket, TopicArn: topicArn}));
-      })
-      .catch(err => {
-        console.log(err);
-        reject(err);
-      });
+    wsk.triggers.get({name: args.triggerName}).then(trigger => {
+      console.log("Create trigger ", util.inspect(trigger, {depth: null}))
+      var subscription = createTopic(trigger).then(subscribe);
+      if (args.bucket) {
+        subscription = subscription
+          .then(validateBucket)
+          .then(configureTopic)
+          .then(configureBucket);
+      }
+      return subscription.then(t => resolve(t.aws));
+    }).catch(err => {
+      console.log(err);
+      reject(err);
+    });
   });
 }
 
-function triggerDelete(trigger, args) {
-  const aws = trigger.annotations.find(x => x.key == 'aws').value;
-  const {Bucket, TopicArn} = aws;
-
-  // We must connect to the region in which the topic was created 
-  args.region = TopicArn.split(':')[3];
-  initAws(args);
-
-  const sns = new AWS.SNS();
-  const s3 = new AWS.S3();
-
-  const reconfigureBucketNotification = function() {
-    return s3.getBucketNotificationConfiguration({Bucket}).promise()
-      .then(data => {
-        data.TopicConfigurations = data.TopicConfigurations.filter(x => x.TopicArn != TopicArn);
-        const params = {Bucket, NotificationConfiguration: data };
-        return s3.putBucketNotificationConfiguration(params).promise();
-      });
-  }
-
+function triggerDelete(args) {
+  const wsk = openwhisk();
   return new Promise(function(resolve, reject) {
-    reconfigureBucketNotification()
-      .then(_ => sns.deleteTopic({TopicArn}).promise())
-      .then(_ => resolve(aws))
-      .catch(err => {
-        console.log(err);
-        reject(err);
-      });
+    wsk.triggers.get({name: args.triggerName}).then(trigger => {
+      console.log("Delete trigger ", util.inspect(trigger, {depth: null}));
+
+      const aws = trigger.annotations.find(x => x.key == 'aws').value;
+      const {Bucket, TopicArn, ResponseMetadata} = aws;
+      args.topicArn = TopicArn
+      const {sns, s3} = initAws(args);
+
+      const reconfigureBucket = function() {
+        return s3.getBucketNotificationConfiguration({Bucket}).promise()
+          .then(data => {
+            data.TopicConfigurations = data.TopicConfigurations.filter(x => x.TopicArn != TopicArn);
+            const params = {Bucket, NotificationConfiguration: data };
+            return s3.putBucketNotificationConfiguration(params).promise();
+          });
+      }
+      const reconfigureTopic = function() {
+        return sns.getTopicAttributes({TopicArn}).promise()
+          .then(data => {
+            const policy = JSON.parse(data.Attributes.Policy);
+            policy.Statement = policy.Statement.filter(x => x.Sid != trigger.name);
+            const params = {TopicArn, AttributeName: 'Policy', AttributeValue: JSON.stringify(policy)};
+            return sns.setTopicAttributes(params).promise();
+          });
+      }
+      const unsubscribe = function() {
+        // This may fail due to confirmation race condition
+        return sns.listSubscriptionsByTopic({TopicArn}).promise()
+          .then(data => {
+            const subs = data.Subscriptions.filter(x => x.Endpoint.endsWith('trigger=' + trigger.name));
+            return Promise.all(subs.map(({SubscriptionArn}) => sns.unsubscribe({SubscriptionArn}).promise()));
+          });
+      }
+
+      var p = Promise.resolve(false);
+      if (Bucket) {
+        p = p.then(reconfigureBucket);
+      }
+      if (TopicArn) {
+        if (ResponseMetadata) // we created it, so we delete it
+          p = p.then(() => sns.deleteTopic({TopicArn}).promise());
+        else
+          p = p.then(reconfigureTopic).then(unsubscribe);
+      }
+      return p.then(() => resolve(aws));
+    }).catch(err => {
+      console.log(err);
+      reject(err);
+    });
   });
 }
 
-function endpointUrl(webhookAction, trigger) {
+function initAws(args) {
+  const accessKeyId = args.accessKeyId;
+  const secretAccessKey = args.secretAccessKey;
+  // We must connect to the region in which the topic was created
+  const region = args.topicArn ? args.topicArn.split(':')[3] : args.region;
+  AWS.config.update({region, credentials: {accessKeyId, secretAccessKey}});
+  return {sns: new AWS.SNS(), s3: new AWS.S3()};
+}
+
+function endpointUrl(webhookAction, triggerName) {
   var action = process.env['__OW_ACTION_NAME'].split('/');
   action[action.length - 1] = webhookAction;
   action = action.join('/');
-  return process.env['__OW_API_HOST'] + '/api/v1/web' + action + '?trigger=' + trigger.name;
+  return process.env['__OW_API_HOST'] + '/api/v1/web' + action + '?trigger=' + triggerName;
 }
 
 exports.main = main;
