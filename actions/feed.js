@@ -11,6 +11,8 @@ function main(args) {
   }
   if (lifecycleEvent === 'DELETE') {
     return triggerDelete(args);
+  } else {
+    console.log('Unsupported lifecycle event:', lifecycleEvent);
   }
 }
 
@@ -135,7 +137,7 @@ function triggerDelete(args) {
           });
       }
 
-      var p = Promise.resolve(false);
+      var p = Promise.resolve();
       if (Bucket) {
         p = p.then(reconfigureBucket);
       }
