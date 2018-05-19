@@ -31,7 +31,8 @@ $WSK --apihost $APIHOST --auth $AUTH action update $PACKAGE_NAME/$WEBHOOK_ACTION
      --web true $PACKAGE_HOME/actions/webhook.js
 $WSK --apihost $APIHOST --auth $AUTH action update $PACKAGE_NAME/events \
      -a description 'Feed that creates an SNS topic to receive S3 bucket events' \
-     -a parameters '[{"name":"bucket", "required":true, "description":"The name of the AWS S3 bucket"}, {"name":"events", "required":false, "description":"The type of S3 events [s3:ObjectCreated:*]"}]' \
+     -a parameters
+'[{"name":"topicArn", "required":false, "description":"The address of an existing SNS topic for the feed"}, {"name":"bucket", "required":false, "description":"The name of the AWS S3 bucket"}, {"name":"events", "required":false, "description":"The type of S3 events [s3:ObjectCreated:*]"}]' \
      -p events "s3:ObjectCreated:*" \
      -a sampleInput '{"bucket":"myBucket", "events": "s3:ObjectCreated:Put, s3:ObjectCreated:Post, s3:ObjectCreated:Copy, s3:ObjectRemoved:*"}' \
      -a feed true -p webhookAction $WEBHOOK_ACTION \
