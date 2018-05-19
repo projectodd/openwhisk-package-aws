@@ -1,4 +1,4 @@
-# AWSpenWhisk
+# AWS and OpenWhisk
 
 This package facilitates the triggering of [Apache OpenWhisk] actions
 in response to events published to [AWS] [SNS] topics. Specific

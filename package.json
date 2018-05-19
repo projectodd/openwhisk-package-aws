@@ -1,11 +1,11 @@
 {
-  "name": "AWSpenWhisk",
+  "name": "openwhisk-aws",
   "version": "0.0.1",
   "description": "Integrating AWS with OpenWhisk",
   "main": "actions/feed.js",
   "repository": {
     "type": "git",
-    "url": "git://github.com/projectodd/awspenwhisk.git"
+    "url": "git://github.com/projectodd/openwhisk-package-aws.git"
   },
   "author": "Jim Crossley",
   "license": "Apache-2.0",
