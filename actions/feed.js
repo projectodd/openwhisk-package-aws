@@ -19,80 +19,78 @@ function main(args) {
 function triggerCreate(args) {
   const {s3, sns} = initAws(args);
   const wsk = openwhisk();
-
-  const createTopic = function(trigger) {
-    const p = args.topicArn ?
-          Promise.resolve({TopicArn: args.topicArn}) :
-          sns.createTopic({Name: trigger.name}).promise();
-    return p.then(data => {
-      trigger.aws = data;       // convenient reference, yay mutability?!
-      trigger.annotations.push({key: 'aws', value: data});
-      return wsk.triggers.update({name: trigger.name, trigger: trigger});
-    }).then(() => trigger);
-  }
-  const subscribe = function(trigger) {
-    const params = {
-      Protocol: 'https', /* required */
-      TopicArn: trigger.aws.TopicArn, /* required */
-      Endpoint: endpointUrl(args.webhookAction, trigger.name)
-    };
-    return sns.subscribe(params).promise()
-      .then(() => trigger);
-  }
-  const configureTopic = function(trigger) {
-    return sns.getTopicAttributes({TopicArn: trigger.aws.TopicArn}).promise()
-      .then(data => {
-        const policy = JSON.parse(data.Attributes.Policy);
-        policy.Statement.push({
-          Sid: trigger.name,
-          Effect: "Allow",
-          Principal: { "AWS" : "*" },
-          Action: [ "SNS:Publish" ],
-          Resource: trigger.aws.TopicArn,
-          Condition: {
-            ArnLike: {
-              "aws:SourceArn": "arn:aws:s3:*:*:" + args.bucket
-            }
-          }
-        });
-        const params = {
-          TopicArn: trigger.aws.TopicArn,
-          AttributeName: 'Policy',
-          AttributeValue: JSON.stringify(policy)
-        };
-        return sns.setTopicAttributes(params).promise()
-          .then(() => trigger);
-      });
-  }
-  const validateBucket = function(trigger) {
-    return s3.getBucketLocation({Bucket: args.bucket}).promise()
-      .then(() => {
-        trigger.aws.Bucket = args.bucket;
-        return wsk.triggers.update({name: trigger.name, trigger: trigger})
-      }).then(() => trigger);
-  }
-  const configureBucket = function(trigger) {
-    return s3.getBucketNotificationConfiguration({Bucket: args.bucket}).promise()
-      .then(data => {
-        var config = {Id: trigger.name, TopicArn: trigger.aws.TopicArn};
-        config.Events = args.events.split(/\s*[,;|]\s*/);
-        data.TopicConfigurations.push(config);
-        const params = {Bucket: args.bucket, NotificationConfiguration: data};
-        return s3.putBucketNotificationConfiguration(params).promise();
-      }).then(() => trigger);
-  }
-
   return new Promise(function(resolve, reject) {
     wsk.triggers.get({name: args.triggerName}).then(trigger => {
       console.log("Create trigger ", util.inspect(trigger, {depth: null}))
-      var subscription = createTopic(trigger).then(subscribe);
+
+      const createTopic = function() {
+        const p = args.topicArn ?
+              Promise.resolve({TopicArn: args.topicArn}) :
+              sns.createTopic({Name: trigger.name}).promise();
+        return p.then(data => {
+          trigger.aws = data;       // convenient reference, yay mutability?!
+          trigger.annotations.push({key: 'aws', value: data});
+          return wsk.triggers.update({name: trigger.name, trigger: trigger});
+        });
+      }
+      const subscribe = function() {
+        const params = {
+          Protocol: 'https', /* required */
+          TopicArn: trigger.aws.TopicArn, /* required */
+          Endpoint: endpointUrl(args.webhookAction, trigger.name)
+        };
+        return sns.subscribe(params).promise();
+      }
+      const configureTopic = function() {
+        return sns.getTopicAttributes({TopicArn: trigger.aws.TopicArn}).promise()
+          .then(data => {
+            const policy = JSON.parse(data.Attributes.Policy);
+            policy.Statement.push({
+              Sid: trigger.name,
+              Effect: "Allow",
+              Principal: { "AWS" : "*" },
+              Action: [ "SNS:Publish" ],
+              Resource: trigger.aws.TopicArn,
+              Condition: {
+                ArnLike: {
+                  "aws:SourceArn": "arn:aws:s3:*:*:" + args.bucket
+                }
+              }
+            });
+            const params = {
+              TopicArn: trigger.aws.TopicArn,
+              AttributeName: 'Policy',
+              AttributeValue: JSON.stringify(policy)
+            };
+            return sns.setTopicAttributes(params).promise();
+          });
+      }
+      const validateBucket = function() {
+        return s3.getBucketLocation({Bucket: args.bucket}).promise()
+          .then(() => {
+            trigger.aws.Bucket = args.bucket;
+            return wsk.triggers.update({name: trigger.name, trigger: trigger})
+          });
+      }
+      const configureBucket = function() {
+        return s3.getBucketNotificationConfiguration({Bucket: args.bucket}).promise()
+          .then(data => {
+            var config = {Id: trigger.name, TopicArn: trigger.aws.TopicArn};
+            config.Events = args.events.split(/\s*[,;|]\s*/);
+            data.TopicConfigurations.push(config);
+            const params = {Bucket: args.bucket, NotificationConfiguration: data};
+            return s3.putBucketNotificationConfiguration(params).promise();
+          });
+      }
+
+      var subscription = createTopic().then(subscribe);
       if (args.bucket) {
         subscription = subscription
           .then(validateBucket)
           .then(configureTopic)
           .then(configureBucket);
       }
-      return subscription.then(t => resolve(t.aws));
+      return subscription.then(() => resolve(trigger.aws));
     }).catch(err => {
       console.log(err);
       reject(err);
